@@ -7,3 +7,11 @@ export function queryData(urlApi, data, method) {
     data: data
   })
 }
+
+export function loginBy(data) {
+  return request({
+    url: 'client/login',
+    method: 'post',
+    data: data
+  })
+}
