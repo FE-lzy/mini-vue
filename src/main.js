@@ -42,6 +42,7 @@ Object.keys(filters).forEach(key => {
 })
 
 Vue.config.productionTip = false
+Vue.prototype.$baseUrl = 'http://localhost:3000'
 
 new Vue({
   el: '#app',

@@ -35,6 +35,12 @@
         <template slot-scope="scope">
           <el-button @click="handleClick(scope.row)" type="text" size="small">查看</el-button>
           <el-button
+            v-if="scope.row.state == 2 && role == 2"
+            @click="printScan(scope.row)"
+            type="text"
+            size="small"
+          >下载</el-button>
+          <el-button
             type="text"
             size="small"
             v-if="scope.row.state == 1 && role == 1"
@@ -71,11 +77,36 @@
       layout="total, sizes, prev, pager, next, jumper"
       :total="listTotal"
     ></el-pagination>
+
+    <el-dialog title="详情" :visible.sync="InfoVisible" width="30%">
+      <div class="grid-content">
+        <el-form label-position="left" inline class="demo-table-expand">
+          <el-form-item label="防伪码">
+            <span>{{batchDetailArr.anti}}</span>
+          </el-form-item>
+          <el-form-item label="激活码">
+            <span>{{batchDetailArr.act}}</span>
+          </el-form-item>
+          <el-form-item label="接收码">
+            <span>{{batchDetailArr.rec}}</span>
+          </el-form-item>
+        </el-form>
+      </div>
+
+      <span slot="footer" class="dialog-footer">
+        <el-button type="primary" @click="InfoVisible = false">关 闭</el-button>
+      </span>
+    </el-dialog>
+    <el-dialog id="progress" title="进度" :visible.sync="progressVisible" width="20%">
+      <el-progress type="circle" :percentage="percentage"></el-progress>
+    </el-dialog>
   </div>
 </template>
 <script>
 import { queryData } from "@/api/common";
 import addModal from "./modal/add";
+const JSZip = require("jszip");
+const FileSaver = require("file-saver");
 export default {
   components: {
     addModal
@@ -99,14 +130,126 @@ export default {
       visible: {
         addFormVisible: false
       },
-      role: ""
+      role: "",
+      InfoVisible: false,
+      progressVisible: false,
+      percentage: 0,
+      batchDetailArr: {
+        anti: "",
+        act: "",
+        rec: ""
+      },
+      scanImg: []
     };
   },
   mounted() {
     this.getBatch();
-    this.role = localStorage.getItem("role");
+    this.role = JSON.parse(localStorage.getItem("userInfo")).role;
   },
   methods: {
+    /**
+     * 下载
+     */
+    async printScan(row) {
+      let res = await queryData(
+        "client/getBatchInfo",
+        { batchId: row.id },
+        "post"
+      );
+      console.log(res);
+      let index = 0;
+      let data = res.data;
+      this.progressVisible = true;
+      let count =
+        data.antidata.length + data.actdata.length + data.recdata.length;
+      let alldata = await this.totalData(
+        data.antidata,
+        data.actdata,
+        data.recdata
+      );
+      for (let i = 0; i < count; i++) {
+        // console.log("参数", alldata[i]);
+        let data = await queryData("web/baseImg", alldata[i], "post");
+        this.scanImg.push(data.data);
+        // this.scanImg.push(this.$baseUrl + url.message.slice(1));
+        this.percentage = Math.round(((i + 1) / count).toFixed(2) * 100);
+      }
+
+      this.StoreDowQrcode(this.scanImg);
+      if (this.percentage == "100") {
+        this.$message.success("下载成功");
+        this.progressVisible = false;
+      }
+    },
+    StoreDowQrcode(arr, blogTitle = "二维码") {
+      console.log(arr);
+      var zip = new JSZip();
+      console.log("-------------", zip);
+      var imgs = zip.folder(blogTitle);
+      console.log("-------------imgs", imgs);
+      var baseList = [];
+      var _this = this;
+      //var arr = ["/images/bg.png", "/images/bg1.png"];
+
+      for (var i = 0; i < arr.length; i++) {
+        console.log(arr[i].name);
+        let name = arr[i].name; //图片名称
+        let image = new Image();
+        // 解决跨域 Canvas 污染问题
+        image.setAttribute("crossOrigin", "anonymous");
+        image.onload = function() {
+          console.log('onload');
+          let canvas = document.createElement("canvas");
+          canvas.width = image.width;
+          canvas.height = image.height;
+          console.log(canvas);
+          let context = canvas.getContext("2d");
+          context.drawImage(image, 0, 0, image.width, image.height);
+          let url = canvas.toDataURL(); // 得到图片的base64编码数据 let url =
+          canvas.toDataURL("image/png");
+          baseList.push({ name: name, img: url.substring(22) });
+          console.log(baseList);
+          if (baseList.length === arr.length) {
+            if (baseList.length > 0) {
+              _this.$notify({
+                title: "成功",
+                message: "即将下载",
+                type: "success"
+              });
+              for (let k = 0; k < baseList.length; k++) {
+                imgs.file(baseList[k].name + ".png", baseList[k].img, {
+                  base64: true
+                });
+              }
+              zip.generateAsync({ type: "blob" }).then(function(content) {
+                // see FileSaver.js
+                FileSaver.saveAs(content, blogTitle + ".zip");
+              });
+            } else {
+              _this.$notify.error({
+                title: "错误",
+                message: "暂无图片可下载"
+              });
+            }
+          }
+        };
+        image.src = arr[i].baseImg = `${arr[i].baseImg}`;
+        console.log(image);
+      }
+    },
+    totalData(anti, act, rec) {
+      let antidata, actdata, recdata;
+      antidata = anti.map(i => {
+        return { sn: i.sn, type: 1 };
+      });
+      actdata = act.map(i => {
+        return { sn: i.sn, type: 2 };
+      });
+      recdata = rec.map(i => {
+        return { sn: i.sn, type: 3 };
+      });
+      return antidata.concat(actdata).concat(recdata);
+    },
     dateFormat(row, column) {
       var dateee = new Date(row.createTime).toJSON();
       return new Date(+new Date(dateee) + 8 * 3600 * 1000)
@@ -135,9 +278,32 @@ export default {
     },
     handleClick(row) {
       console.log(row);
+      this.InfoVisible = true;
       queryData("client/getBatchInfo", { batchId: row.id }, "post").then(
         res => {
           console.log(res);
+          let data = res.data;
+          this.batchDetailArr.anti = data.antidata
+            ? data.antidata.length > 1
+              ? data.antidata[0].sn +
+                "——" +
+                data.antidata[data.antidata.length - 1].sn
+              : data.antidata[0].sn
+            : " ";
+          this.batchDetailArr.act = data.actdata
+            ? data.actdata.length > 1
+              ? data.actdata[0].sn +
+                "——" +
+                data.actdata[data.actdata.length - 1].sn
+              : data.actdata[0].sn
+            : " ";
+          this.batchDetailArr.rec = data.recdata
+            ? data.recdata.length > 1
+              ? data.recdata[0].sn +
+                "——" +
+                data.recdata[data.recdata.length - 1].sn
+              : data.recdata[0].sn
+            : " ";
         }
       );
     },
@@ -158,6 +324,9 @@ export default {
     },
     changeBatch(param) {
       this.visible.addFormVisible = param;
+      if (param == false) {
+        this.getBatch();
+      }
     },
     closeAddBatch() {
       console.log("object");
@@ -214,7 +383,7 @@ export default {
   }
 };
 </script>
-<style >
+<style lang="scss">
 .container {
   margin: 20px 30px;
 }
@@ -227,5 +396,10 @@ export default {
 
 .el-table .success-row {
   background: #f0f9eb;
+}
+#progress {
+  .el-dialog__body {
+    text-align: center;
+  }
 }
 </style>
